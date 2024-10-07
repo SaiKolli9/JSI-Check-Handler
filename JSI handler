@@ -1,0 +1,189 @@
+public class JSI_DaylightAdjustmentTriggerHandler {
+    
+    // Method to validate service selections based on certain rules and conditions
+    public static void rightServiceSelectValidation(List<skedhealthcare__Job_Service_Item__c> JSIs){
+        
+        // Declare sets and maps to store service IDs, jobs, and holidays
+        Set<Id> serviceIds = new Set<Id>();
+        List<enrtcr__Service__c> services = new List<enrtcr__Service__c>();
+        Map<Id,enrtcr__Service__c> serviceMap = new Map<Id,enrtcr__Service__c>();
+        List<sked__Holiday__c> publicHolidays = new List<sked__Holiday__c>();
+        Map<Date,sked__Holiday__c> holidayMap = new Map<Date,sked__Holiday__c>();
+        Set<Id> jobIds = new Set<Id>();
+        List<sked__Job__c> jobs = new List<sked__Job__c>();
+        Map<Id,sked__Job__c> jobMap = new Map<Id,sked__Job__c>();
+        
+        // Query for public holidays and populate holidayMap
+        publicHolidays = [SELECT id,name,sked__Start_Date__c, sked__End_Date__c
+                          FROM sked__Holiday__c 
+                          WHERE sked__Start_Date__c != null 
+                          AND sked__End_Date__c != null];
+        
+        for(sked__Holiday__c holiday : publicHolidays){
+            holidayMap.put(holiday.sked__Start_Date__c, holiday);
+        }
+        
+        // Populate serviceIds and jobIds from JSIs
+        for(skedhealthcare__Job_Service_Item__c currJSI : JSIs){
+            if(currJSI.skedhealthcare__Service__c != null){
+                serviceIds.add(currJSI.skedhealthcare__Service__c);
+            }
+            if(currJSI.skedhealthcare__Job__c != null){
+                jobIds.add(currJSI.skedhealthcare__Job__c);
+            }
+        }
+        
+        // Query for services based on serviceIds and populate serviceMap
+        services = [SELECT Id, skedhealthcare__Time_of_Day__c, Time_of_Day_Start__c, Time_of_Day_End__c 
+                    FROM enrtcr__Service__c 
+                    WHERE Id in: serviceIds 
+                    AND skedhealthcare__Time_of_Day__c != null 
+                    AND Time_of_Day_End__c != null 
+                    AND Time_of_Day_Start__c != null];
+        if(services != null && services.size() > 0){
+            for(enrtcr__Service__c currService : services){
+                serviceMap.put(currService.Id, currService);
+            }
+        }
+        
+        // Query for jobs based on jobIds and populate jobMap
+        if(jobIds != null && !jobIds.isEmpty()){
+            jobs = [SELECT Id, name, skedsg__Interpretation_Rule_Type__c, skedhealthcare__Sleepover__c, skedhealthcare__Delivery_Method__c, sked__Recurring_Schedule__c
+                    FROM sked__Job__c
+                    WHERE Id in: jobIds];
+        }
+        if(jobs != null && jobs.size() > 0){
+            for(sked__Job__c job : jobs){
+                jobMap.put(job.Id, job);
+            }
+        }
+        
+        // Main logic for validating each Job Service Item (JSI)
+        for(skedhealthcare__Job_Service_Item__c currJSI : JSIs){
+            
+            // Extracting day of the week for start and end times
+            String endDayOfWeek = currJSI.skedhealthcare__End__c.format('EEEE');
+            String startDayOfWeek = currJSI.skedhealthcare__Start__c.format('EEEE');
+            
+            // Retrieving service-related time information
+            Time ruleStartTime = serviceMap.get(currJSI.skedhealthcare__Service__c).Time_of_Day_Start__c;
+            Time ruleEndTime = serviceMap.get(currJSI.skedhealthcare__Service__c).Time_of_Day_End__c;
+            String serviceTimeOfDay = serviceMap.get(currJSI.skedhealthcare__Service__c).skedhealthcare__Time_of_Day__c;
+            
+            // Check if the job has a recurring schedule, if yes, skip public holiday validation
+            if (jobMap.get(currJSI.skedhealthcare__Job__c).sked__Recurring_Schedule__c != null) {
+                // Skip public holiday check, continue with other checks
+                continue;
+            }
+            
+            // Various conditions for validation checks
+            Boolean isNextDay = ((startDayOfWeek == 'Monday' && endDayOfWeek == 'Tuesday') || 
+                                 (startDayOfWeek == 'Tuesday' && endDayOfWeek == 'Wednesday') ||
+                                 (startDayOfWeek == 'Wednesday' && endDayOfWeek == 'Thursday') ||
+                                 (startDayOfWeek == 'Thursday' && endDayOfWeek == 'Friday') ||
+                                 (startDayOfWeek == 'Friday' && endDayOfWeek == 'Saturday') ||
+                                 (startDayOfWeek == 'Saturday' && endDayOfWeek == 'Sunday') ||
+                                 (startDayOfWeek == 'Sunday' && endDayOfWeek == 'Monday'));
+            Boolean isPublicHoliday = holidayMap.containsKey(currJSI.skedhealthcare__Start__c.date());
+            Boolean isStartSaturday = startDayOfWeek == 'Saturday';
+            Boolean isEndSaturday = endDayOfWeek == 'Saturday';
+            Boolean isStartSunday = startDayOfWeek == 'Sunday';
+            Boolean isEndSunday = endDayOfWeek == 'Sunday';
+            Boolean isSameDay = endDayOfWeek == startDayOfWeek;
+            Boolean isDifferentDay = endDayOfWeek != startDayOfWeek;
+            Boolean isWeekDay = !isPublicHoliday && !isStartSaturday && !isEndSaturday && !isStartSunday && !isEndSunday;
+            
+            Boolean weekdayDaytimeJobTime = (currJSI.skedhealthcare__Start__c.time() >= ruleStartTime && currJSI.skedhealthcare__End__c.time() <= ruleEndTime && isSameDay);
+            Boolean weekdayEveningJobTime = ((currJSI.skedhealthcare__End__c.time() > ruleStartTime && currJSI.skedhealthcare__End__c.time() < Time.newinstance(23,59,59,999) && isSameDay) || 
+                                             (currJSI.skedhealthcare__End__c.time() == ruleEndTime && !isSameDay));
+            Boolean weekdayNightJobTime = (((isWeekDay && !isSameDay && isNextDay && (currJSI.skedhealthcare__Start__c.time() < ruleEndTime || currJSI.skedhealthcare__End__c.time() > ruleStartTime)) ||
+                                            (isWeekDay && isSameDay && currJSI.skedhealthcare__Start__c.time() < ruleEndTime)) || 
+                                           (!isSameDay && isEndSaturday && currJSI.skedhealthcare__End__c.time() == ruleStartTime && !isStartSunday && !isEndSunday && !isStartSaturday));
+            system.debug('weekdayNightJobTime ==> '+ weekdayNightJobTime);
+            system.debug('half ==> '+ ((isWeekDay && !isSameDay && isNextDay && currJSI.skedhealthcare__Start__c.time() < ruleEndTime || currJSI.skedhealthcare__End__c.time() > ruleStartTime) ||
+                                       (isWeekDay && isSameDay && currJSI.skedhealthcare__Start__c.time() < ruleEndTime)));                       
+            system.debug('weekdayNightJobTime ==> '+ (isWeekDay && !isSameDay && isNextDay && currJSI.skedhealthcare__Start__c.time() < ruleEndTime || currJSI.skedhealthcare__End__c.time() > ruleStartTime));                       
+            system.debug('weekdayNightJobTime ==> '+ (isWeekDay && isSameDay && currJSI.skedhealthcare__Start__c.time() < ruleEndTime));                       
+            system.debug('weekdayNightJobTime ==> '+ isNextDay); 
+            system.debug('weekdayNightJobTime ==> '+ !isSameDay);                       
+            system.debug('weekdayNightJobTime ==> '+ !isSameDay);                       
+            
+            
+            /*Boolean WeekdayNightJobTime = ((currJSI.skedhealthcare__Start__c.time() < Time.newinstance(23,59,59,999) && currJSI.skedhealthcare__End__c.time() > ruleStartTime && !isSameDay && 
+!isStartSaturday && !isStartSunday && !isEndSunday && (!isEndSaturday || (isEndSaturday && currJSI.skedhealthcare__End__c.time() == ruleStartTime))) ||
+(currJSI.skedhealthcare__Start__c.time() < ruleEndTime && isSameDay && !isStartSaturday && !isEndSaturday && !isStartSunday && !isEndSunday));*/
+            Boolean publicHolidayCondn = ((isPublicHoliday && serviceTimeOfDay != 'Public Holiday') || 
+                                          (!isPublicHoliday && serviceTimeOfDay == 'Public Holiday'));
+            Boolean sleepoverCondn = (
+                jobMap.get(currJSI.skedhealthcare__Job__c).skedhealthcare__Sleepover__c != true || 
+                !jobMap.get(currJSI.skedhealthcare__Job__c).skedsg__Interpretation_Rule_Type__c.equals('Sleepover') || 
+                !currJSI.skedhealthcare__Delivery_Method__c.equals('Fixed Quantity')
+            );
+            
+            Boolean saturdayCondn = ((isStartSaturday && isEndSaturday) || 
+                                     (isStartSaturday && isEndSunday && currJSI.skedhealthcare__End__c.time() == Time.newinstance(0,0,0,0))); 
+            Boolean sundayCondn = ((isStartSunday && isEndSunday) || 
+                                   (isStartSunday && endDayOfWeek == 'Monday' && currJSI.skedhealthcare__End__c.time() ==  Time.newinstance(0,0,0,0)));
+            
+            // Applying validation errors based on the conditions
+            if(publicHolidayCondn == true){
+                currJSI.addError('Public Holiday Error');
+            }
+            
+            // Check for Weekday Daytime conditions
+            else if(((serviceTimeOfDay == 'Weekday Daytime' &&
+                      !weekdayDaytimeJobTime &&
+                      !isPublicHoliday && 
+                      !isStartSaturday && 
+                      !isEndSaturday && 
+                      !isStartSunday && 
+                      !isEndSunday) ||
+                     (serviceTimeOfDay == 'Weekday Daytime' &&
+                      !weekdayDaytimeJobTime &&
+                      !isPublicHoliday && 
+                      ((isStartSaturday || isStartSunday)||(isEndSaturday || isEndSunday)))) ||
+                    (serviceTimeOfDay == 'Weekday Daytime' && !isWeekDay)){
+                        currJSI.addError('The service you have selected is a Weekday Daytime service. Please select the correct service and try again.');
+                    }
+            
+            // Check for Weekday Evening conditions
+            else if(((serviceTimeOfDay == 'Weekday Evening' &&
+                      !weekdayEveningJobTime &&
+                      !isPublicHoliday && 
+                      !isStartSaturday && 
+                      !isStartSunday && 
+                      !isEndSunday) || 
+                     (serviceTimeOfDay == 'Weekday Evening' &&
+                      !weekdayEveningJobTime &&
+                      !isPublicHoliday && 
+                      ((isStartSaturday || isStartSunday)||(isEndSunday))))||
+                    (serviceTimeOfDay == 'Weekday Evening' && (isStartSaturday || isStartSunday || isEndSunday))){
+                        currJSI.addError('The service you have selected is a Weekday Evening service. Please select the correct service and try again.');
+                    }
+            
+            // Check for Weekday Night conditions
+            else if(serviceTimeOfDay == 'Weekday Night' &&
+                    !weekdayNightJobTime &&
+                    !isPublicHoliday){
+                        currJSI.addError('The service you have selected is a Weekday Night service. Please select the correct service and try again.');
+                    }
+            
+            // Check for Sleepover conditions and Error message
+            else if(sleepoverCondn && serviceTimeOfDay == 'Sleepover'){
+                currJSI.addError('You have selected a Sleepover service, Please tick the sleepover checkbox, Interpretation rule and delivery method ');
+            }
+            
+            // Check for Saturday conditions and Error message
+            else if(!saturdayCondn && serviceTimeOfDay == 'Saturday'){
+                currJSI.addError('The service you have selected is Saturday service. Please select the correct service and try again');
+            }
+            
+            // Check for Sunday conditions and Error message
+            else if(!sundayCondn && serviceTimeOfDay == 'Sunday'){
+                currJSI.addError('The service you have selected is a Sunday service. Please select the correct service and try again');
+                
+                //JSI_DaylightAdjustmentTriggerHandler.rightServiceSelectValidation(trigger.new); 31&4 lines
+            }
+        }
+    }
+}
