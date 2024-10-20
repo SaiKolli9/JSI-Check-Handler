@@ -1,0 +1,51 @@
+trigger JSI_DaylightAdjustmentTrigger on skedhealthcare__Job_Service_Item__c (before insert, before update, after insert) {
+    
+    Boolean beforeInsertSwitch = JSI_Console_Trigger__mdt.getInstance('JSI_Validation_Checks')?.Before_Insert_Flag__c;
+    Boolean beforeUpdateSwitch = JSI_Console_Trigger__mdt.getInstance('JSI_Validation_Checks')?.Before_Update_Flag__c;
+// JSI_violationCheckHandler this handler is being used in this class
+    if(Trigger.isInsert && Trigger.isBefore){
+        if(beforeInsertSwitch){
+        	JSI_violationCheckHandler.rightServiceSelectValidation(trigger.new); 
+        }
+        for(skedhealthcare__Job_Service_Item__c job : Trigger.new){
+            
+            Boolean StartDL = DayLightSavingsHelper.AdjustDayLightTime(job.skedhealthcare__Start__c);
+            Boolean FinishDL = DayLightSavingsHelper.AdjustDayLightTime(job.skedhealthcare__End__c);
+        
+            Datetime newStart =  null;
+            Datetime newFinish =  null;
+        
+            if(StartDL == true){
+                newStart = job.skedhealthcare__Start__c.addHours(11);
+            } else {
+                newStart = job.skedhealthcare__Start__c.addHours(10);
+            }
+        
+            if(FinishDL == true){
+                newFinish = job.skedhealthcare__End__c.addHours(11);
+            } else {
+                newFinish = job.skedhealthcare__End__c.addHours(10);
+            }
+            
+            job.DLS_End__c = newFinish;
+            job.DLS_Start__c = newStart;
+        }
+    }
+   // JSI_violationCheckHandler this handler is being used in this class 
+    if (Trigger.isBefore && Trigger.isUpdate) {
+		if(beforeUpdateSwitch){
+        	JSI_violationCheckHandler.rightServiceSelectValidation(trigger.new); 
+        }        
+        for (Integer i = 0; i < Trigger.new.size(); i++) {
+            skedhealthcare__Job_Service_Item__c newJob = Trigger.new[i];
+            skedhealthcare__Job_Service_Item__c oldJob = Trigger.old[i];
+            
+            newJob.DLS_End__c = DayLightSavingsHelper.getAEDTTime(newJob.skedhealthcare__End__c);
+            newJob.DLS_Start__c = DayLightSavingsHelper.getAEDTTime(newJob.skedhealthcare__Start__c);
+        }
+    }
+    
+    if(Trigger.isAfter && Trigger.isInsert){
+        JSI_violationCheckHandler.notifyAgentsAboutRecurringJSI(trigger.new);
+    }
+}
